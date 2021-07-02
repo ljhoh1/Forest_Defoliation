@@ -1,0 +1,76 @@
+﻿variable;unit;description;class;group;data_av_inside_group;data_av_overall
+tmean_y;°C;Annual mean temperature;numeric;climate;equal (0-4 loc missing);good (till 2018)
+tmin_may;°C;min temperature may;numeric;climate;equal (0-4 loc missing);good (till 2018)
+d_tmin0;day;days above 0°C min. temperature per year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+d_tmean5;day;days above 5°C av. temperature per year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+d_tmean20;day;days above 20°C av. temperature per year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+globrad_y;MJ m-2;Annual mean global radiation;numeric;climate;equal (0-4 loc missing);good (till 2018)
+prec_y;mm;Annual precipitation sum;numeric;climate;equal (0-4 loc missing);good (till 2018)
+et0_y;mm;Annual evapotranspiration sum;numeric;climate;equal (0-4 loc missing);good (till 2018)
+cwb_y;mm;Annual climatic water balance (prec - et0);numeric;climate;equal (0-4 loc missing);good (till 2018)
+s_veg;day;start of vegetation period;numeric;climate;equal (0-4 loc missing);good (till 2018)
+d_veg;day;duration of vegetation period;numeric;climate;equal (0-4 loc missing);good (till 2018)
+tmean_y_lag1;°C;annual mean temperature of previous year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+globrad_y_lag1;MJ m-2;annual mean global radiation of previous year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+prec_y_lag1;mm;Annual precipitation sum of previous year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+et0_y_lag1;mm;Annual evapotranspiration sum of previous year;numeric;climate;equal (0-4 loc missing);good (till 2018)
+cwb_y_lag1;mm;Annual climatic water balance of previous year;numeric;climate;equal (0-5 loc missing);good (till 2018)
+spei_3_may;[-];Standardized Precipitation Evaporation Index 3 of month may;numeric;climate;equal (0-5 loc missing). 2011 4 missing instead of 2;good (till 2018)
+spei_3_aug;[-];SPEI3 August;numeric;climate;equal (0-5 loc missing);good (till 2018)
+spei_6_sep;[-];SPEI6 September;numeric;climate;equal (0-5 loc missing);good (till 2018)
+spei_12_oct;[-];SPEI12 October;numeric;climate;equal (0-5 loc missing);good (till 2018)
+spei_24_oct;[-];SPEI12 October;numeric;climate;equal (0-5 loc missing);good (till 2018)
+n_tot_wd;kg ha-1 a-1 *10;Total wet deposition of nitrogen;numeric;deposition;equal (2-4 loc missing);good (till 2016)
+ac_tot_wd;eq ha-1 a-1;Total wet deposition of acid;numeric;deposition;equal (2-4 loc missing);good (till 2016)
+s_vals;mol_c m-2;sum of exchangeably bound alkaline cations in the soil;numeric;soil;236 loc missing;medium (bad till 1989)
+basa_lev;[1-6];classification of base saturation in the soil;ordered factor;soil;232 loc missing;medium (bad till 1989)
+depth_mm;mm;soil depth;numeric;soil;199 loc missing;medium (bad till 1989)
+nfk;mm;(usable) field capacity (max. plant available water in the soil);numeric;soil;242 loc missing;medium (bad till 1989)
+skel_perc;%;coarse soil content (> 2mm grain size);numeric;soil;199 loc missing;medium (bad till 1989)
+tpi500;[-];topographic position index;numeric;topography;equal (one loc missing);good
+tpi750;[-];diff. height of a DTM cell to av. height of sourrounding DTM cells;numeric;topography;equal (one loc missing);good
+tpi1000;[-];Depends on scale defining neighbouring cells (500-1000m);numeric;topography;equal (one loc missing);good
+twi25;[-];topographic wetness index;numeric;topography;equal (one loc missing);good
+twi50;[-];composite relief parameter (slope, catchment area);numeric;topography;equal (one loc missing);good
+twi100;[-];provides information on the ratio of inflow volume;numeric;topography;equal (one loc missing);good
+twi25_mf;[-];to the gradient available for onward transport (slope gradient) ;numeric;topography;equal (one loc missing);good
+twi50_mf;[-];gradient available for onward transport (slope gradient) ;numeric;topography;equal (one loc missing);good
+gw;[0/1];location groundwater-influenced;factor;twi_site;unequal (1037 of 2500 loc missing);bad
+sw;[0/1];location slack water-influenced;factor;twi_site;unequal (1037 of 2500 loc missing);bad
+geol_no;55 levels ;geology;factor;twi_site;unequal (150 of 2500 loc missing);medium
+soil_no;14 levels;soil ;factor;twi_site;unequal (27 of 2500 loc missing);medium
+soil_ty_no;12 levels;soil type;factor;twi_site;unequal (31 of 2500 loc missing);medium
+humus_no;8 levels;humus type;factor;twi_site;unequal (28 of 2500 loc missing);medium
+water_no;6 levels ;water budget soil (e.g. fresh, dry);factor;twi_site;unequal (25 of 2500 loc missing);medium
+nutri_no;[1-3];nutrient supply (bad, med, good);ordered factor;twi_site;unequal (57 of 2500 loc missing);medium
+slope_dir;9 levels;slope direction;factor;twi_site;unequal (12 of 2500 loc missing);medium
+skel_no;[1-3];coarse soil classification;ordered factor;twi_site;unequal (42 of 2500 loc missing);medium
+depth_no;[1-3];depth classification (shallow - deep);ordered factor;twi_site;unequal (124 of 2500 loc missing);medium
+alt_m;m;altitude;numeric;twi_site;unequal (10 of 2500 loc missing);medium
+slope_deg;degree;slope;numeric;twi_site;unequal (71 of 2500 loc missing);medium
+H_spec;[-];Shannon's function tree species;numeric;twi_stand;unequal (0 of 46766 missing);good
+Es;[-];Evenness Index tree species;numeric;twi_stand;unequal (4141 of 46766 missing);medium
+H_bhd;[-];Shannon's function tree diameter;numeric;twi_stand;unequal (6038 of 46766 missing);medium
+Ed;[-];Evenness Index tree diameter;numeric;twi_stand;unequal (6074 of 46766 missing);medium 
+crown_lev;[1-3];tree crown closure ;ordered factor;twi_stand;unequal (2265 of 46766 missing);medium
+fruct_lev;[1-3];Level of fructification;ordered factor;twi_stand;unequal (24833 of 46766 missing);bad
+relawat_mean;[0-1];av. annual relative water availability in the soil (% nFK) ;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+d_relawat04;day;days per year with relawat < 0.4 (threshold for water stress);numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+stres_mean;[0-1];av. annual ratio transpiration/pot. transpiration ;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+awat_mean;mm;av. annual plant available soil water in root zone ;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+tran_mean;mm;av. annual transpiration;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+defsum_tdiff;mm;sum of difference pot. transpiration-transpiration per year;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+defsum_awat04_d;mm;Deficit sum plant available water on days with relawat < 0.4;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+psilogmean_mean;hPa;av. annual matric potential;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+d_psi1200;day;day with matric potential < -1200 hPa (threshold for water stres);numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+defsum_psi1200;hPa;Deficit sum matric potential on days with psilogmean < -1200 hPa;numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+defsum_awat04_l;mm;Deficit sum plant available water on days with relawat < 0.4 (diff. way of calculation);numeric;water;equal (dep. on tree sp 0-7 loc missing ('89-'16));"medium (bad till 1989); only till 2018"
+id;;ID of each location;factor;;;
+y_utm;;UTM 32 coordinates (EPSG 25832)  lat;numeric;;;
+x_utm;;UTM 32 coordinates (EPSG 25832)  long;numeric;;;
+source;;part of the twi or dbfl (two different surveys);factor;;;
+year;;year of data collection;numeric;;;
+tree_age;year;tree age;numeric;;;
+tree_sp_eu;6 species;abbrevation of tree species;factor;;;
+nbv_ratio;%/100;ratio of defoliation (averaged for all trees of the same species per year and location);numeric;;;
+n_trees;;number of trees per species and location;numeric;;;

@@ -1,0 +1,1109 @@
+---
+title: "Untitled"
+author: "Lennart Hoheisel"
+date: "6/4/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+# loading the required packages
+knitr::opts_chunk$set(echo = TRUE)
+# missing obs
+require(mice)
+require(JointAI)
+
+# correlation plot and data tools
+require(dplyr)
+require(tidyr)
+require(tibble)
+require(purrr)
+require(ggplot2)
+require(reshape2)
+
+# figures
+options(repr.plot.width=15, repr.plot.height=15)
+require(RColorBrewer)
+require(forcats)
+
+# maps
+require(sp)
+require(rgdal)
+require(giscoR)
+require(tmap)
+require(ggplot)
+require(sf)
+
+# gam
+require(mgcv)
+require(mltools)
+require(data.table)
+require(Metrics)
+
+# random forest
+require(randomForest)
+require(MLmetrics)
+require(caret)
+require(ROCR)
+require(e1071)
+```
+
+# Project 1 - Understanding Forest Damage in Germany
+## Lennart Hoheisel
+
+```{r data}
+# reading in the data
+raw = read.table("foresthealth.txt", sep = ";", header = T, stringsAsFactors = T)
+data = raw[,!names(raw) %in% "X" ]
+```
+
+```{r trans_dtype}
+# description of the data
+dtype = as.data.frame(sapply(data,class))
+rownames(dtype) <- 1:nrow(dtype); colnames(dtype) = c("obs_type")
+dtype["index"] = colnames(data)
+meaning = read.table("variablesNHA.csv", sep = ";", header = T)[, c(1, 3, 4)]
+row74 = c("Es", "Evenness Index tree species", "numeric")
+row75 = c("H_bhd", "Shannon's function tree diameter", "numeric")
+meaning = rbind(meaning, c(row74))
+meaning = rbind(meaning, c(row75))
+
+colnames(meaning) = c("index", "description", "real_type")
+
+desc = merge(dtype, meaning, by = "index")
+
+# transforming each data column into the data type specified in variablesNHA.csv
+for (row in 1:dim(desc)[1]) {
+  dtyp_imp = desc[row, 2]
+  dtyp_tru = desc[row, 4]
+  if (dtyp_imp != dtyp_tru) {
+    if (grepl("ordered factor", dtyp_tru)) {
+      data[ , desc[row, 1]] = factor( as.vector( data[ , desc[row, 1]] ) ,
+                                   ordered = is.ordered(data[ , desc[row, 1]]))
+    } else if (grepl("factor", dtyp_tru)) {
+      data[ , desc[row, 1]] = factor( as.vector( data[ , desc[row, 1]] ) )
+    } else if (grepl("numeric", dtyp_tru)) {
+      data[ , desc[row, 1]] = as.numeric( as.vector( data[ , desc[row, 1]] ) )
+    }
+  }
+}
+
+#checking whether dtypes align
+dtype2 = as.data.frame(sapply(data,class))
+rownames(dtype2) <- 1:nrow(dtype2); colnames(dtype2) = c("obs_type")
+dtype2["index"] = colnames(data)
+meaning2 = read.table("variablesNHA.csv", sep = ";", header = T)[, c(1, 3, 4)]
+row74 = c("Es", "Evenness Index tree species", "numeric")
+row75 = c("H_bhd", "Shannon's function tree diameter", "numeric")
+meaning2 = rbind(meaning2, c(row74))
+meaning2 = rbind(meaning2, c(row75))
+colnames(meaning2) = c("index", "description", "real_type")
+
+# final description of the data
+desc2 = merge(dtype2, meaning2, by = "index")
+```
+
+```{r check, fig.size=c(10,10)}
+# visualisation of missing values
+dd = data
+iter = 0
+# dropping all columns where no NAs are present
+for (col in colnames(dd) ) {
+  iter = iter + 1
+  if (typeof(dd[1, col]) == "str") {
+
+  }
+  else if (sum( is.na( as.vector(dd[, col]) ) ) == 0) {
+    dd = dd[-iter]
+    iter = iter - 1
+  }
+  else if (sum( is.na( as.vector(dd[, col]) ) ) > 0) {
+  }
+}
+
+md_pattern(dd, pattern = FALSE, color = c('#34111b', '#e30f41'), print_yaxis = F)
+sum(complete.cases(data))
+```
+
+```{r summary}
+# summary of data
+summary(data)
+```
+
+```{r correlation}
+# correlation plot
+dd = data %>% 
+  select(order(colnames(data)))
+dd = dd[ , -which(desc2[,2] %in% c("factor"))]
+
+cormat <- round(cor(dd[complete.cases(dd),]),2)
+head(cormat)
+
+melted_cormat <- melt(cormat)
+head(melted_cormat)
+
+# plotting the correlation as a first indicator
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) +
+  geom_tile()
+```
+
+```{r figure_code}
+# function to plot categorical variables by plot (NOT ADJUSTED FOR NUMBER OF TREES IN THE PLOT)
+figures = function(data, var, colours =  c("#FF5733", " #9625FA"), xlab, ylab, title) {
+  
+  
+  total = as.numeric( length( dim( data )[1] ) )
+  
+  # finding all categories and their respective density limiting to categories with density beyond 1%
+  data <- data %>% 
+    select(c(n_trees, {{var}}, spat, year)) %>%
+    mutate( lev = str( get(var) ) ) %>%
+    group_by( {{var}} ) %>%
+    summarise(tot = sum(n_trees)) %>%
+    mutate(dens =  tot / sum(data$n_trees)) %>%
+  
+    filter( dens>=0.01 ) %>%
+    
+    # renaming NAs
+    mutate( lev = fct_explicit_na( get(var), "No Response" ) ) %>%
+    arrange( desc(dens) )
+
+  m = ggplot(data, aes(x=reorder(lev, -n), y=dens, fill=reorder(lev, -n))) +
+        # make bar plot according to density found above
+        geom_bar(stat = "identity") +
+        scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                      brewer.pal(n=10, "PiYG") ),
+                           name = paste0("Legend: \n", xlab ) ) +
+        # add density labels
+        geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+              position = position_dodge(0.9), size=2.5) +
+        theme(legend.position = "right") +
+        xlab(xlab) +
+        ylab(ylab) +
+        ggtitle(title)
+  m
+}
+```
+
+```{r figures}
+# figures for categorical variables adjusted for number of trees in the plot
+# the figure code follows the same structure as the function above and is not explained for each figure specifically
+
+# figure 1: Distribution of Frutification Levels
+data$spat <- factor(paste0(data$x_utm, data$y_utm))
+dat_fruct <- data %>% 
+  # finding the frutification level by number of trees with this level
+  select(c(n_trees, fruct_lev, spat, year)) %>%
+  mutate( lev = str( fruct_lev ) ) %>%
+  group_by(fruct_lev) %>%
+  summarise(tot = sum(n_trees)) %>%
+  mutate(dens =  tot / sum(data$n_trees)) %>%
+  filter( dens>=0.01 ) %>%
+  
+  mutate( lev = fct_explicit_na( fruct_lev , "No Response" ) ) %>%
+  arrange( desc(dens) )
+
+m = ggplot(dat_fruct, aes(x=reorder(lev, -tot), y=dens, fill=reorder(lev, -tot))) +
+
+      geom_bar(stat = "identity") +
+      scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                    brewer.pal(n=10, "PiYG") ),
+                         name = paste0("Legend: \n", "Frutification Level" ) ) +
+      geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+            position = position_dodge(0.9), size=2.5) +
+
+      theme(legend.position = "right") +
+      xlab("Frutification Level") +
+      ylab("Percentage") +
+      ggtitle("Distribution of Frutification Levels")
+m
+
+# figure 2: Distribution of Tree Species in Europe
+data$spat <- factor(paste0(data$x_utm, data$y_utm))
+dat_n_trees <- data %>% 
+  select(c(n_trees, tree_sp_eu, spat, year)) %>%
+  group_by(tree_sp_eu) %>%
+  summarise(tot_spec = sum(n_trees))%>%
+  mutate(tree_sp_eu, dens =  tot_spec / sum(data$n_trees)) %>%
+
+  filter( dens>=0.01 ) %>%
+  mutate( lev = fct_explicit_na( tree_sp_eu, "No Response" ) ) %>%
+  arrange( desc(dens) )
+
+xlab="Tree Species"; ylab="Percentage"; title="Distribution of Tree Species"
+m = ggplot(dat_n_trees, aes(x=reorder(lev, -tot_spec), y=dens, fill=reorder(lev, -tot_spec))) +
+
+      geom_bar(stat = "identity") +
+      scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                    brewer.pal(n=10, "PiYG") ),
+                         name = paste0("Legend: \n", xlab ) ) +
+      geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+            position = position_dodge(0.9), size=2.5) +
+
+      theme(legend.position = "right") +
+      xlab(xlab) +
+      ylab(ylab) +
+      ggtitle(title)
+m
+
+# figure 3: Distribution of Hummus Type
+dat_hummus <- data %>% 
+  select(c(n_trees, humus_no, spat, year)) %>%
+  mutate( lev = str( humus_no ) ) %>%
+  group_by(humus_no) %>%
+  summarise(tot = sum(n_trees)) %>%
+  mutate(dens =  tot / sum(data$n_trees)) %>%
+  
+  filter( dens>=0.01 ) %>%
+  
+  mutate( lev = fct_explicit_na( humus_no , "No Response" ) ) %>%
+  arrange( desc(dens) )
+
+m = ggplot(dat_hummus, aes(x=reorder(lev, -tot), y=dens, fill=reorder(lev, -tot))) +
+
+      geom_bar(stat = "identity") +
+      scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                    brewer.pal(n=10, "PiYG") ),
+                         name = paste0("Legend: \n", "Hummus Type" ) ) +
+      geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+            position = position_dodge(0.9), size=2.5) +
+
+      theme(legend.position = "right") +
+      xlab("Hummus Type") +
+      ylab("Percentage") +
+      ggtitle("Distribution of Hummus Type")
+m
+
+# tree age intervals
+tree_ints <- data %>%
+  select(tree_age) %>%
+  mutate(ints = cut(tree_age, breaks = c(0, 90, 150, 210, 270) ))
+
+# figure 4: Distribution of Tree Age
+dat_age <- data %>% 
+  select(c(n_trees, tree_age, spat, year)) %>%
+  mutate(ints = cut(tree_age, breaks = c(0, 90, 150, 210, 270) )) %>%
+  mutate( lev = str( ints ) ) %>%
+  group_by(ints) %>%
+  summarise(tot = sum(n_trees)) %>%
+  mutate(dens =  tot / sum(data$n_trees)) %>%
+  
+  filter( dens>=0.01 ) %>%
+  
+  mutate( lev = fct_explicit_na( ints , "No Response" ) ) %>%
+  arrange( desc(dens) )
+
+m = ggplot(dat_age, aes(x=reorder(lev, -tot), y=dens, fill=reorder(lev, -tot))) +
+
+      geom_bar(stat = "identity") +
+      scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                    brewer.pal(n=10, "PiYG") ),
+                         name = paste0("Legend: \n", "Tree Age" ) ) +
+      geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+            position = position_dodge(0.9), size=2.5) +
+
+      theme(legend.position = "right") +
+      xlab("Tree Age") +
+      ylab("Percentage") +
+      ggtitle("Distribution of Tree Age")
+m
+
+# figure 5: Distribution of Soil Type
+dat_soil <- data %>% 
+  select(c(n_trees, soil_no, spat, year)) %>%
+  mutate( lev = str( soil_no ) ) %>%
+  group_by(soil_no) %>%
+  summarise(tot = sum(n_trees)) %>%
+  mutate(dens =  tot / sum(data$n_trees)) %>%
+  
+  filter( dens>=0.01 ) %>%
+  
+  mutate( lev = fct_explicit_na( soil_no , "No Response" ) ) %>%
+  arrange( desc(dens) )
+
+m = ggplot(dat_soil, aes(x=reorder(lev, -tot), y=dens, fill=reorder(lev, -tot))) +
+
+      geom_bar(stat = "identity") +
+      scale_fill_manual( values = c(brewer.pal(n=11, "Spectral"),
+                                    brewer.pal(n=10, "PiYG") ),
+                         name = paste0("Legend: \n", "Soil Type" ) ) +
+      geom_text( aes( label=round(dens,2), y = dens + 0.01), vjust=0, color="black",
+            position = position_dodge(0.9), size=2.5) +
+
+      theme(legend.position = "right") +
+      xlab("Soil Type") +
+      ylab("Percentage") +
+      ggtitle("Distribution of Soil Type")
+m
+
+# figure5: Density of NBV
+df <- data %>% 
+  select(nbv_ratio, n_trees) %>%
+  mutate( ints = cut(nbv_ratio, breaks = seq(0, 1, 0.1) )) %>%
+  mutate( lev = str( ints ) ) %>%
+  group_by(ints) %>%
+  summarise(tot = sum(n_trees)) %>%
+  mutate(dens =  tot / sum(data$n_trees))
+
+sum(df$dens[6:10])
+
+m <- ggplot(df) +
+  geom_bar(aes(x=ints, y=dens), stat="identity")+
+  theme(legend.position = "right") +
+  xlab("Level of Defoliation") +
+  ylab("Percentage") +
+  ggtitle("Distribution of State of Defoliation")
+
+m
+```
+```{r splits}
+# split into train and test
+train_test_split <- function(data, train_size=0.75) {
+
+
+  # splitting data into groups
+  tree_species_prep <- data %>%
+    select(-c(id, x_utm, y_utm, sw, gw, fruct_lev, spat, s_veg, d_veg)) %>%
+    na.omit()
+
+  tree_species_train <- tree_species_prep %>%
+    sample_frac(train_size)
+
+  Y_train <- tree_species_train %>%
+    select(c(nbv_ratio, tree_sp_eu)) %>%
+    group_split(tree_sp_eu)
+
+  X_train <- tree_species_train %>%
+    select(-c(nbv_ratio)) %>%
+    group_split(tree_sp_eu)
+
+  tree_species_test <- tree_species_prep %>%
+    anti_join(tree_species_train)
+
+  Y_test <- tree_species_test %>%
+    select(c(nbv_ratio, tree_sp_eu)) %>%
+    group_split(tree_sp_eu)
+
+  X_test <- tree_species_test %>%
+    select(-c(nbv_ratio)) %>%
+    group_split(tree_sp_eu)
+
+  return(list(X_train, Y_train, X_test, Y_test))
+
+}
+```
+
+
+```{r tree_rf, cache=TRUE}
+# modelling the random FOrest for each species
+# splitting by tree species and accordinf to a random split for training and testing the model
+splits = train_test_split(data, train_size=0.75)
+
+# model function
+model_rf <- function(spec_data_X, spec_data_y) {
+  # Build the model on the basis of training data as described above
+  #
+  # Inputs:
+  # - spec_data_X (tibble)   <- training dataset, containing the feature information by species
+  # - spec_data_y (tibble)   <- training dataset, containing the response information by species
+  #
+  # Outputs:
+  #   - models (list)       <- list containing the model for each species
+  models = list()
+  for (id in 1:length(spec_data_X)) {
+    # size of the data for each species usable by randomForest
+    print( dim( as.data.frame( spec_data_X[[id]] ) ) )
+    models[[id]] = randomForest( as.data.frame( spec_data_X[[id]] ),  spec_data_y[[id]] %>% pull(nbv_ratio) )
+  }
+  return(models)
+}
+
+models <- model_rf(splits[[1]], splits[[2]])
+```
+
+```{r mod_eval, cache=TRUE}
+# evaluate the model
+evaluate <- function(models, X_test, y_test) {
+  # Evaluate the accuracy, precision and recall
+  #
+  # Inputs:
+  # - model(prediction model)   <- the model summary statistics are to be found for
+  # - X_test (feature matrix)   <- test dataset, containing the feature information
+  # - Y_test (response vector)  <- test dataset, containing the response information
+  #
+  # Outputs:
+  #   - scores (data frame)       <- data frame containing accuracy, precision, recall scores
+  scores <- as.data.frame(matrix(NA, 6, 4))
+  colnames(scores) <- c("Accuracy",  "Precision",  "Recall", "R-Squared")
+  names <- data %>%
+    distinct(tree_sp_eu) %>%
+    arrange(tree_sp_eu)
+  names[] <- lapply(names, as.character)
+
+  row.names(scores) <- names %>% pull(tree_sp_eu)
+  
+  for (mod in 1:length(models)) {
+    
+    # make predictions and cast them in intervals of low, medium and high defoliation
+    y_hat <-  as.data.frame( list( as.vector( unname( predict(models[[mod]], 
+                                                              newdata=X_test[[mod]]) ) ) ), 
+                             col.names = "per") %>%
+                mutate(ints = (per > 0.25) +  (per > 0.45)) %>%
+                pull(ints)
+    # cast the actually observed defoliation values in the same classes
+    y_true <- y_test[[mod]] %>%
+                mutate(ints = (nbv_ratio > 0.25) + (nbv_ratio > 0.45)) %>%
+                pull(ints)
+    
+    # confusion matrix
+    con_M <- confusionMatrix(as.factor(y_hat), as.factor(y_true))$table
+
+    # find accuracy, precision and recall [this code is taken from StackOverflow XX]
+    scores[mod,] <- c(sum(diag(con_M)) / sum(con_M),
+                      diag(con_M) / rowSums(con_M),
+                      diag(con_M) / colSums(con_M),
+                      models[[mod]]$rsq)
+  }
+  return(scores)
+}
+
+evaluate(models, X_test=splits[[3]], y_test=splits[[4]])
+
+
+roc_auc <- function(splits = splits, test = 2) {
+  # Evaluate the AUC scores and plot auc curve according to these sources [XX]
+  #
+  # Inputs:
+  # - splits(data frame)   <- data used for prediction
+  # - test (integer)   <- values [0, 2], indicating whether test AUC is estimated
+  #
+  # Outputs:
+  #   - aucs (data frame)       <- data frame containing AUCS
+
+  
+  # store AUCs
+  aucs <- matrix(NA, 6, 3)
+  colnames(aucs) <- c("0 - 25 %",  "25 - 45 %",  "45 - 100 %")
+  names <- data %>%
+    distinct(tree_sp_eu) %>%
+    arrange(tree_sp_eu)
+  names[] <- lapply(names, as.character)
+
+  row.names(aucs) <- names %>% pull(tree_sp_eu)
+
+  for (spec in 1:6) {
+    # casting both train and test response
+    d_y_train = splits[[2]][[spec]] %>%
+
+      mutate(ints = (nbv_ratio > 0.25) + (nbv_ratio > 0.45)) %>%
+      pull(ints)
+
+    d_y_test = splits[[4]][[spec]] %>%
+
+      mutate(ints = (nbv_ratio > 0.25) + (nbv_ratio > 0.45)) %>%
+      pull(ints)
+    
+    # creating the plot for AUCs
+    plot(x=NA, y=NA, xlim=c(0,1), ylim=c(0,1),
+         ylab="Precision",
+         xlab="Recall",
+         bty='n')
+
+    colors <- c("red", "blue", "green")
+    y_true = as.factor(d_y_train)
+
+    # this part of the code is taken from one of my sources (Eric Plog's Medium.com Article:
+    # {https://medium.com/@plog397/auc-roc-curve-scoring-function-for-multi-class-classification-9822871a6659})
+    for (i in seq_along(levels(y_true))) {
+      cur.class <- levels(y_true)[i]
+      # binarizing classifier response 
+      binary.labels <- as.factor(d_y_train == cur.class)
+      # fitting a new model
+      model <- randomForest( as.data.frame( splits[[1]][[spec]] ), binary.labels )
+      pred <- predict(model, splits[[1+test]][[spec]], type='response')
+      score <- as.numeric( as.logical(pred) )# posterior for  positive class
+      if (test == 2) {
+        test.labels <- d_y_test == cur.class
+      } else {
+        test.labels <- d_y_train == cur.class
+      }
+      pred <- prediction(score, test.labels)
+      perf <- performance(pred, "prec", "rec")
+      roc.x <- unlist(perf@x.values)
+      roc.y <- unlist(perf@y.values)
+      lines(roc.y ~ roc.x, col = colors[i], lwd = 2)
+      # store AUC
+      auc <- performance(pred, "auc")
+      auc <- unlist(slot(auc, "y.values"))
+      aucs[spec, i] <- auc
+    }
+    lines(x=c(0,1), c(0,1))
+    legend("bottomright", levels(y_true), lty=1,
+           bty="n", col = colors)
+  }
+  return(aucs)
+}
+
+roc_auc(splits)
+```
+
+```{r}
+# feature importance function
+feat_imp <- function(mods = models) {
+  # Feature Importance is returned beyond some threshold from passed models
+  #
+  # Inputs:
+  # - models (list)   <- data used for prediction
+  #
+  # Outputs:
+  #   - importance (data frame)       <- data frame containing the feature importance of each model (by tree species)
+  
+  impi = as.data.frame( round(importance(mods[[1]]), 2) )
+  imp_df <- as.data.frame(impi)
+  # create a data frame object of the feature importance
+  for (mod in 2:6) {
+    impi = as.data.frame( round(importance(mods[[mod]]), 2) )
+    imp_df[,mod] <- impi
+  }
+  imp_df = as.data.frame(imp_df)
+  
+  #adding the name of tree species used
+  names <- data %>%
+    distinct(tree_sp_eu) %>%
+    arrange(tree_sp_eu)
+  names[] <- lapply(names, as.character)
+  # adding the column names of variables
+  colnames(imp_df) <- names %>% pull(tree_sp_eu)
+  imp_df <- imp_df %>%
+    arrange(desc(Gfi))
+  return(imp_df)
+}
+
+importance = feat_imp()
+```
+
+
+```{r species_transformation}
+# data preperation for gam
+tree_species_mean <- function(data, feat_imp = importance) {
+  # Data preparation for the gam model to select the most important features and remove the problematic observations
+  #
+  # Inputs:
+  # - data (tibble)   <- data intended to transform
+  # - feat_imp        <- feature importance from randomForest model
+  # Outputs:
+  #   - tree_data (tibble)       <- transformed data (by tree species)
+  # temporal-spatio model
+  data$spat <- factor(paste0(data$x_utm, data$y_utm))
+
+  # splitting data into groups
+  tree_species_list <- data %>%
+    group_split(tree_sp_eu)
+
+  # number of species
+  tree_species = data %>%
+    distinct(tree_sp_eu)
+
+  # feature importance prep
+  feat_imp <- feat_imp %>%
+    rownames_to_column("feature")
+
+  # features extracted
+
+  # seperate the data into tree species and find unique values (averaging)
+  tree_data = list(tree_species_list, tree_species)
+  for (spec in 1:dim(tree_species)[1] ) {
+    # getting the feature importance for the current species and extract all features with relative importance above 1%
+    feat_imp_spec <- as.data.frame( feat_imp[ , c(1, spec + 1)] ) %>%
+      mutate(perc = feat_imp[,spec + 1] / sum (feat_imp[,spec + 1]) ) %>%
+      filter(perc > 0.01) %>%
+      arrange(desc(perc))
+
+    # inlcude the most important features
+    tree_data[[spec]] <- tree_species_list[[spec]][,c("x_utm", "y_utm", "year", "spat", "nbv_ratio", feat_imp_spec[,1])]
+    # remove duplicated columns and transform problematic columns
+    tree_data[[spec]] <- tree_data[[spec]][, !duplicated(colnames(tree_data[[spec]]))] %>%
+      group_by(year, spat, x_utm, y_utm) %>%
+      mutate(across(where(is.double), mean)) %>%
+      distinct()
+  }
+  return(tree_data)
+}
+```
+
+```{r tree_data}
+# getting the necessary data 
+tree_data = tree_species_mean(data)
+```
+
+```{r gamm_dgl, cache=TRUE}
+# model is only documented for the first tree species, all other models follow the same idea
+# the various tested models are excluded from this code, only the final model code is given
+# tests across models (e.g. AIC, BIC etc.) are excluded from the string for the reason that only final model is given
+
+# assigning the model data
+dat_dgl <- data.frame(tree_data[[1]])
+
+# train - test split
+train_dgl <- dat_dgl %>%
+  sample_frac(0.8)
+
+# transforming the test feature matrix
+test_dgl_X <- dat_dgl %>%
+  anti_join(train_dgl) %>%
+  select(-c(nbv_ratio))
+
+# transforming test response vector
+test_dgl_Y <- dat_dgl %>%
+  anti_join(train_dgl) %>%
+  select(c(nbv_ratio))
+
+# building gam model with defoliation untransformed as response
+mod_dgl_fin <- gam(nbv_ratio ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                  k = c(25,20))
+                   # cubic regresion smooothers for covariates
+                   + s(tree_age, bs="cr", k=30) + s(H_bhd, bs="cr", k=10) + s(H_spec, bs="cr", k=10)
+                   + slope_dir + soil_no,
+                   data=train_dgl,
+                   # correlation structure of the resiudals in accordance with EIckenscheidt MOdel
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   # assuming normality and inducing logit-link function
+                   family = gaussian(link="logit"),
+                   # weighting by number of trees per location
+                   weights = train_dgl$n_trees,
+                   # method used is REML as suggested in Wood [2007]
+                   method="REML")
+
+# predicting on test data with final model
+y_pred <- predict(mod_dgl_fin, newdata=test_dgl_X, type = "response")
+test_dgl_Y <- test_dgl_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]
+
+# exmaining mean-variance relationship
+e <- residuals(mod_dgl_fin); fv <- fitted(mod_dgl_fin)
+lm(log(e^2) ~ log(fv))
+
+# examining the fitted mean, according to Wood [XX]
+mean(dat_dgl$nbv_ratio); mean(fitted(mod_dgl_fin)^(1/0.65))
+
+# Checking the gam model for residual patterns
+par(mfrow = c(2, 2))
+gam.check(mod_dgl_fin)
+mtext("Douglas Fir Model Check", side = 3, line = -13, outer = TRUE)
+
+# plotting the models location smoothers
+par(mfrow=c(2, 2))
+plot(mod_dgl_fin, residuals = T)
+mtext("Douglas Fir Smoothers Residual Plot", side = 3, line = -13, outer = TRUE)
+
+# plotting the map
+plot(mod_dgl_fin, select = 1)
+mtext("Spruce Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(2, 2))
+plot(mod_dgl_fin, select = 2)
+plot(mod_dgl_fin, select = 3)
+plot(mod_dgl_fin, select = 4)
+mtext("Douglas fir Smoothers", side = 3, line = -13, outer = TRUE)
+# summary of the model
+summary(mod_dgl_fin)
+anova(mod_dgl_fin)
+
+# computing residual mean squared error from the data above
+rmse(test_dgl_Y, y_pred)
+```
+
+```{r mod_gfi, cache=TRUE}
+dat_gfi <- data.frame(tree_data[[2]])
+
+
+train_gfi <- dat_gfi %>%
+  sample_frac(0.8)
+
+test_gfi_X <- dat_gfi %>%
+  anti_join(train_gfi) %>%
+  select(-c(nbv_ratio))
+
+test_gfi_Y <- dat_gfi %>%
+  anti_join(train_gfi) %>%
+  select(c(nbv_ratio))
+
+mod_gfi_fin <- gam(nbv_ratio ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                  k = c(45,25))
+                   + s(tree_age, bs="cr", k=20) + s(H_bhd, bs="cr", k=20)
+                   + s(ac_tot_wd, bs="cr", k=20)
+                   + slope_dir + geol_no
+
+                   ,
+                   data=train_gfi,
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   family = gaussian(link="logit"),
+                   weights = train_gfi$n_trees,
+                   method="REML")
+
+y_pred <- predict(mod_gfi_fin, newdata=test_gfi_X, type = "response")
+test_gfi_Y <- test_gfi_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]
+
+e <- residuals(mod_gfi_fin); fv <- fitted(mod_gfi_fin)
+lm(log(e^2) ~ log(fv))
+mean(dat_gfi$nbv_ratio); mean(fitted(mod_gfi_fin)^(1/0.65))
+
+par(mfrow=c(2, 2))
+plot(mod_gfi_fin, residuals = T)
+mtext("Spruce Smoothers Residual Plot", side = 3, line = -13, outer = TRUE)
+
+plot(mod_gfi_fin, select = 1)
+mtext("Spruce Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(2, 2))
+plot(mod_gfi_fin, select = 2)
+plot(mod_gfi_fin, select = 3)
+plot(mod_gfi_fin, select = 4)
+mtext("Spruce Smoothers", side = 3, line = -13, outer = TRUE)
+
+par(mfrow = c(2, 2))
+gam.check(mod_gfi_fin)
+mtext("Spruce Model Check", side = 3, line = -13, outer = TRUE)
+summary(mod_gfi_fin)
+anova(mod_gfi_fin)
+
+rmse(test_gfi_Y, y_pred)
+```
+
+
+```{r mod_gki, cache=TRUE}
+dat_gki <- data.frame(tree_data[[3]])
+
+train_gki <- dat_gki %>%
+  sample_frac(0.8)
+
+test_gki_X <- dat_gki %>%
+  anti_join(train_gki) %>%
+  select(-c(nbv_ratio))
+
+test_gki_Y <- dat_gki %>%
+  anti_join(train_gki) %>%
+  select(c(nbv_ratio))
+
+mod_gki_fin <- gam(nbv_ratio^0.65 ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                       k = c(45,25))
+                   + s(tree_age, bs="cr", k=40) + s(globrad_y_lag1, bs="cr", k=40)+ s(s_vals, bs="cr", k=80)
+                   + s(ac_tot_wd, bs="cr", k=40)
+                   + s(tpi750, bs="cr", k=100)
+                   + slope_dir + soil_ty_no + depth_mm,
+                   data=train_gki,
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   family = gaussian(link="logit"),
+                   weights = train_gki$n_trees,
+                   method="REML")
+
+y_pred <- predict(mod_gki_fin, newdata=test_gki_X, type = "response")
+test_gki_Y <- test_gki_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]^(1/0.65)
+
+e <- residuals(mod_gki_fin); fv <- fitted(mod_gki_fin)
+lm(log(e^2) ~ log(fv))
+mean(dat_gki$nbv_ratio); mean(fitted(mod_gki_fin)^(1/0.65))
+
+par(mfrow = c(2, 2))
+gam.check(mod_gki_fin)
+mtext("Pine Model Check", side = 3, line = -13, outer = TRUE)
+summary(mod_gki_fin)
+anova(mod_gki_fin)
+
+par(mfrow=c(3, 2))
+plot(mod_gki_fin, select = 2, residuals = T)
+plot(mod_gki_fin, select = 3, residuals = T)
+plot(mod_gki_fin, select = 4, residuals = T)
+plot(mod_gki_fin, select = 5, residuals = T)
+plot(mod_gki_fin, select = 6, residuals = T)
+mtext("Pine Smoothers Residual Plot", side = 3, line = -11, outer = TRUE)
+
+plot(mod_gki_fin, select = 1)
+mtext("Pine Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(3, 2))
+plot(mod_gki_fin, select = 2)
+plot(mod_gki_fin, select = 3)
+plot(mod_gki_fin, select = 4)
+plot(mod_gki_fin, select = 5)
+plot(mod_gki_fin, select = 6)
+mtext("Pine Smoothers", side = 3, line = -12, outer = TRUE)
+
+rmse(test_gki_Y, y_pred)
+```
+
+```{r gamm_rbu, cache=TRUE}
+dat_rbu <- data.frame(tree_data[[4]])
+
+
+train_rbu <- dat_rbu %>%
+  sample_frac(0.8)
+
+test_rbu_X <- dat_rbu %>%
+  anti_join(train_rbu) %>%
+  select(-c(nbv_ratio))
+
+test_rbu_Y <- dat_rbu %>%
+  anti_join(train_rbu) %>%
+  select(c(nbv_ratio))
+
+mod_rbu_fin <- gam(nbv_ratio^0.75 ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                       k = c(40,25))
+                   + s(tree_age, bs="cr", k=20)
+                   + s(ac_tot_wd, k = 10) + s(n_tot_wd, k = 10)
+                   + H_bhd + s(globrad_y_lag1, bs="cr", k=10) + H_spec + prec_y
+                   + prec_y_lag1
+                   + slope_dir + soil_no,
+                   data=train_rbu,
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   family = gaussian(link="logit"),
+                   weights = train_rbu$n_trees,
+                   method="REML")
+
+y_pred <- predict(mod_rbu_fin, newdata=test_rbu_X, type = "response")
+test_rbu_Y <- test_rbu_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]^(1/0.75)
+
+e <- residuals(mod_rbu_fin); fv <- fitted(mod_rbu_fin)
+lm(log(e^2) ~ log(fv))
+mean(dat_rbu$nbv_ratio); mean(fitted(mod_rbu_fin)^(1/0.75))
+
+par(mfrow = c(2, 2))
+gam.check(mod_rbu_fin)
+mtext("Beech Model Check", side = 3, line = -13, outer = TRUE)
+summary(mod_rbu_fin)
+anova(mod_rbu_fin)
+
+par(mfrow=c(2, 2))
+plot(mod_rbu_fin, select = 2, residuals = T)
+plot(mod_rbu_fin, select = 3, residuals = T)
+plot(mod_rbu_fin, select = 4, residuals = T)
+plot(mod_rbu_fin, select = 5, residuals = T)
+mtext("Beech Smoothers Residual Plot", side = 3, line = -13, outer = TRUE)
+
+plot(mod_rbu_fin, select = 1)
+mtext("Beech Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(2, 2))
+plot(mod_rbu_fin, select = 2)
+plot(mod_rbu_fin, select = 3)
+plot(mod_rbu_fin, select = 4)
+plot(mod_rbu_fin, select = 5)
+mtext("Beech Smoothers", side = 3, line = -13, outer = TRUE)
+
+rmse(test_rbu_Y, y_pred)
+```
+
+```{r gamm_tei, cache=TRUE}
+dat_tei <- data.frame(tree_data[[5]])
+#dat_tei <- one_hot(as.data.table(dat_tei), cols = c("soil_no", "slope_dir"))
+#dat_tei <- dat_tei[,-c("soil_no_8", "slope_dir_7")]
+
+train_tei <- dat_tei %>%
+  sample_frac(0.8)
+
+test_tei_X <- dat_tei %>%
+  anti_join(train_tei) %>%
+  select(-c(nbv_ratio))
+
+test_tei_Y <- dat_tei %>%
+  anti_join(train_tei) %>%
+  select(c(nbv_ratio))
+
+mod_tei_fin <- gam(nbv_ratio^0.5 ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                      k = c(40,25))
+                   + s(tree_age, bs="cr", k=120) + s(alt_m, bs="cr", k=100) + s(s_vals, bs="cr", k=100)
+                   + slope_dir + soil_no
+                   + n_tot_wd,
+                   data=dat_tei,
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   family = gaussian(link="logit"),
+                   weights = dat_tei$n_trees,
+                   method="REML")
+
+y_pred <- predict(mod_tei_fin, newdata=test_tei_X, type = "response")
+test_tei_Y <- test_tei_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]^2
+
+par(mfrow=c(2, 2))
+plot(mod_tei_fin, select = 2, residuals = T)
+plot(mod_tei_fin, select = 3, residuals = T)
+plot(mod_tei_fin, select = 4, residuals = T)
+mtext("Oak Smoothers Residual Plot", side = 3, line = -13, outer = TRUE)
+
+par(mfrow=c(2, 2))
+plot(mod_tei_fin)
+mtext("Oak Smoothers", side = 3, line = -13, outer = TRUE)
+
+plot(mod_tei_fin, select = 1)
+mtext("Oak Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(2, 2))
+plot(mod_tei_fin, select = 2)
+plot(mod_tei_fin, select = 3)
+plot(mod_tei_fin, select = 4)
+mtext("Oak Smoothers", side = 3, line = -13, outer = TRUE)
+
+e <- residuals(mod_tei_fin); fv <- fitted(mod_tei_fin)
+lm(log(e^2) ~ log(fv))
+mean(dat_tei$nbv_ratio); mean(fitted(mod_tei_fin)^2)
+
+par(mfrow = c(2, 2))
+gam.check(mod_tei_fin)
+mtext("Oak Model Check", side = 3, line = -13, outer = TRUE)
+summary(mod_tei_fin)
+anova(mod_tei_fin)
+
+rmse(test_tei_Y, y_pred)
+```
+
+```{r gamm_wta, cache=TRUE}
+dat_wta <- data.frame(tree_data[[6]])
+#dat_wta <- one_hot(as.data.table(dat_wta), cols = c("soil_no", "slope_dir"))
+#dat_wta <- dat_wta[,-c("soil_no_1", "slope_dir_7")]
+
+train_wta <- dat_wta %>%
+  sample_frac(0.8)
+
+test_wta_X <- dat_wta %>%
+  anti_join(train_wta) %>%
+  select(-c(nbv_ratio))
+
+test_wta_Y <- dat_wta %>%
+  anti_join(train_wta) %>%
+  select(c(nbv_ratio))
+
+mod_wta_fin <- gam(nbv_ratio^0.8 ~ te(y_utm, x_utm, year, bs = c("tp","tp"), d = c(2,1),
+                                      k = c(25,20))
+                   + s(tree_age, bs="cr", k=20) + s(tpi750, bs="cr", k=80)
+                   + ac_tot_wd + n_tot_wd + n_trees + alt_m + globrad_y
+                   + slope_dir + soil_no,
+                   data=train_wta,
+                   correlation = corARMA(form =~ year | spat, p=1, q=1),
+                   family = gaussian(link="logit"),
+                   weights = train_wta$n_trees,
+                   method="REML")
+
+e <- residuals(mod_wta_fin); fv <- fitted(mod_wta_fin)
+lm(log(e^2) ~ log(fv))
+mean(dat_wta$nbv_ratio); mean(fitted(mod_wta_fin))^1.25
+
+y_pred <- predict(mod_wta_fin, newdata=test_wta_X, type = "response")
+test_wta_Y <- test_wta_Y$nbv_ratio[!is.na(y_pred)]; y_pred <- y_pred[!is.na(y_pred)]^1.25
+
+par(mfrow=c(1, 2))
+plot(mod_wta_fin, select = 2, residuals = TRUE)
+plot(mod_wta_fin, select = 3, residuals = TRUE)
+mtext("Silver Fir Smoothers Residual Plot", side = 3, line = -22, outer = TRUE)
+
+plot(mod_wta_fin, select = 1)
+mtext("Silver Fir Spatio-Temporal Smoother", side = 3, line = -22, outer = TRUE)
+
+par(mfrow=c(1, 2))
+plot(mod_wta_fin, select = 2)
+plot(mod_wta_fin, select = 3)
+mtext("Silver Fir Smoothers", side = 3, line = -22, outer = TRUE)
+
+par(mfrow = c(2, 2))
+gam.check(mod_wta_fin)
+mtext("Silver Fir Model Check", side = 3, line = -13, outer = TRUE)
+summary(mod_wta_fin)
+anova(mod_wta_fin)
+
+rmse(test_wta_Y, y_pred)
+
+```
+
+```{r maps, cache=TRUE, include=FALSE}
+# code for building the maps
+require(raster)
+raw_map = read.table("foresthealth.txt", sep = ";", header = T, stringsAsFactors = T)
+data_map = raw_map[,!names(raw_map) %in% "X" ]
+
+# importing the gisco map data for BW
+GER <- gisco_get_nuts(country = "Germany", nuts_level = 1)
+BW <- GER[16,]
+
+
+tree_species_list <- data_map %>%
+  group_split(tree_sp_eu)
+
+tree_species = data_map %>%
+  distinct(tree_sp_eu)
+
+tree_data = list(tree_species_list, tree_species)
+
+# preparing the data for plotting
+for (spec in 1:dim(tree_species)[1]) {
+  tree_data[[spec]] <- tree_species_list[[spec]] %>%
+    dplyr::select(x_utm, y_utm, year, tree_age, nbv_ratio, n_trees) %>%
+    group_by(year, x_utm, y_utm) %>%
+    summarize(tree_age_mean = mean(tree_age, na.rm=TRUE),
+              nbv_ratio = mean(nbv_ratio, na.rm=TRUE),
+              n_trees = mean(n_trees, na.rm=TRUE)) %>%
+    distinct()
+}
+
+
+species <- data_map %>%
+  dplyr::select(tree_sp_eu) %>%
+  arrange(tree_sp_eu) %>%
+  unique() %>%
+  pull(tree_sp_eu)
+
+years <- data_map %>%
+  dplyr::select(year) %>%
+  unique() %>%
+  arrange(year) %>%
+  pull (year)
+
+for (spec in 1:length(tree_species_list)) {
+  n_year = tree_data[[spec]] %>%
+    ungroup() %>%
+    dplyr::select(year) %>%
+    unique() %>%
+    pull(year)
+
+  for (year_no in n_year[1: length(n_year) - 1]) {
+    # preparing the data as before with the severity class of defoliation
+    dat <- tree_data[[spec]] %>%
+      dplyr::select(x_utm, y_utm, year, nbv_ratio) %>%
+      mutate(ints = cut(nbv_ratio, breaks = c(0, 0.25, 0.45, 1))) %>%
+      filter(year == year_no) %>%
+      dplyr::select(-c(nbv_ratio, year))
+
+    # casting data as sf
+    dat_3 <- st_as_sf(dat, coords = c('x_utm', 'y_utm'), crs=25832)
+
+    # creating the map, by adding location observations on top of the BW map 
+    bw_map <- tm_shape(BW) +
+      tm_polygons(contrast=.7, id="name", col = "azure") +
+      tm_shape(dat_3) +
+      tm_dots("ints", palette=c("darkgreen", "darkorange", "deeppink"), scale = 3, title=paste0(year_no), legend.show = FALSE)
+
+    # save maps in folder
+    name <- paste0(species[spec], year_no, ".png")
+    setwd("C:/Users/ljhoh/OneDrive - University of Edinburgh/03_Dissertation/Forest_Defoliation/Maps")
+    tmap_save(bw_map, filename = name)
+
+  }
+  # building final map and including the legend (otherwise like above)
+  dat <- tree_data[[spec]] %>%
+    dplyr::select(x_utm, y_utm, year, nbv_ratio) %>%
+    mutate(ints = cut(nbv_ratio, breaks = c(0, 0.25, 0.45, 1))) %>%
+    filter(year == sapply(list(n_year), tail, 1)) %>%
+    dplyr::select(-c(nbv_ratio, year))
+
+  dat_3 <- st_as_sf(dat, coords = c('x_utm', 'y_utm'), crs=25832)
+
+  bw_map <- tm_shape(BW) +
+    tm_polygons(contrast=.7, id="name", col = "azure") +
+    tm_shape(dat_3) +
+    tm_dots("ints", palette=c("darkgreen", "darkorange", "deeppink"), scale = 3,
+            title=paste(sapply(list(n_year), tail, 1), "Defoliation", species[[spec]]))
+
+  name <- paste0(species[spec], sapply(list(n_year), tail, 1), ".png")
+  
+  #saving to my directory. hence commented out
+  #setwd("C:/Users/ljhoh/OneDrive - University of Edinburgh/03_Dissertation/Forest_Defoliation/Maps")
+  tmap_save(bw_map, filename = name)
+}
+```
